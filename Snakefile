@@ -3,8 +3,81 @@ import os.path as op
 import xmltodict
 import flatten_dict
 
-# this is probably correct on Linux.
+# this is probably correct on Linux. Since we're using op.expanduser, you can
+# include a tilde (~) in your path, which we'll expand to your home directory.
 INKSCAPE_PREF_FILE = op.expanduser("~/.config/inkscape/preferences.xml")
+
+
+rule link_bitmap_images:
+    input:
+        'template.svg',
+        'einstein.png',
+        'curie.png',
+    output:
+        'figure.svg',
+    run:
+        import subprocess
+        import shutil
+        shutil.copy(input[0], output[0])
+        for i, im in enumerate(input[1:]):
+            print(f"Copying {im} into IMAGE{i+1}, by calling 'sed -i s|IMAGE{i+1}\"|{im}\"|g {output[0]}'")
+            # we add the trailing " to make sure we only replace IMAGE1, not IMAGE10
+            subprocess.call(['sed', '-i', f's|IMAGE{i+1}"|{im}"|g', output[0]])
+
+
+rule embed_bitmaps_into_figure:
+    input:
+        # marking this as ancient means we don't rerun this step if the
+        # preferences file has changed, which is good because it changes
+        # everytime we run this step
+        ancient(INKSCAPE_PREF_FILE),
+        'figure.svg',
+    output:
+        'figure_dpi-{bitmap_dpi}.svg',
+    run:
+        import subprocess
+        import shutil
+        from glob import glob
+        shutil.copy(input[1], output[0])
+        # set the bitmap dpi to the user-specified values, holding onto
+        # whatever value is there before the process is run.
+        orig_dpi = write_create_bitmap_resolution(input[0], wildcards.bitmap_dpi)
+        # grab the ids of the linked images
+        ids = get_image_ids(input[1])
+        print(f"Embedding images with ids: {ids}")
+        # construct the string that selects these images...
+        select_ids = ''.join([f'select-by-id:{id};' for id in ids])
+        # embeds them in a new bitmap, then deletes the linked images...
+        action_str = select_ids + "SelectionCreateBitmap;select-clear;" + select_ids + "EditDelete;"
+        # and saves and quit out of the file
+        action_str += "FileSave;FileQuit;"
+        print(f"Inkscape action string:\n{action_str}")
+        subprocess.call(['inkscape', '-g', f'--actions={action_str}', output[0]])
+        # the inkscape call above embeds the bitmaps but also
+        # apparently creates a separate png file containing the
+        # embedded bitmaps, which we want to remove. commas get
+        # replaced with underscores in the paths of those files, so
+        # check for those as well
+        extra_files = glob(output[0] + '-*') + glob(output[0].replace(',', '_') + '-*')
+        print(f"Will remove the following: {extra_files}")
+        for f in extra_files:
+            try:
+                os.remove(f)
+            except FileNotFoundError:
+                # then the file was removed by something else. this happens if
+                # multiple of these processes is run simultaneously, I think.
+                continue
+        # reset the bitmap dpi to its value before this process was run.
+        write_create_bitmap_resolution(input[0], orig_dpi)
+
+
+rule convert_to_pdf:
+    input:
+        '{file_name}.svg'
+    output:
+        '{file_name}.pdf'
+    shell:
+        "inkscape -o {output} {input}"
 
 
 def write_create_bitmap_resolution(path, res=300):
@@ -72,6 +145,7 @@ def get_image_ids(path):
         --action="select-by-id:{ids[0]};EditDelete;" {path}'`
 
     """
+    # svgs are just xml, so we can read them like any other xml file.
     with open(path) as f:
         doc = xmltodict.parse(f.read())
     # we can have a strange hierarchy in the svg, depending on how we've
@@ -84,67 +158,3 @@ def get_image_ids(path):
     ids = [flattened_svg[(*k[:-1], '@id')] for k, v in images.items()
            if op.exists(v)]
     return ids
-
-
-rule metamer_comparison_figure:
-    input:
-        'template.svg',
-        'einstein.png',
-        'curie.png',
-    output:
-        'figure.svg',
-    run:
-        import subprocess
-        import shutil
-        shutil.copy(input[0], output[0])
-        for i, im in enumerate(input[1:]):
-            print(f"Copying {im} into IMAGE{i+1}, by calling 'sed -i s|IMAGE{i+1}\"|{im}\"| {output[0]}'")
-            # we add the trailing " to make sure we only replace IMAGE1, not IMAGE10
-            subprocess.call(['sed', '-i', f's|IMAGE{i+1}"|{im}"|', output[0]])
-
-
-rule embed_bitmaps_into_figure:
-    input:
-        # marking this as ancient means we don't rerun this step if the
-        # preferences file has changed, which is good because it changes
-        # everytime we run this step
-        ancient(INKSCAPE_PREF_FILE),
-        'figure.svg',
-    output:
-        'figure_dpi-{bitmap_dpi}.svg',
-    run:
-        import subprocess
-        import shutil
-        from glob import glob
-        orig_dpi = write_create_bitmap_resolution(input[0], wildcards.bitmap_dpi)
-        ids = get_image_ids(input[1])
-        print(f"Embedding images with ids: {ids}")
-        select_ids = ''.join([f'select-by-id:{id};' for id in ids])
-        action_str = select_ids + "SelectionCreateBitmap;select-clear;" + select_ids + "EditDelete;"
-        action_str += "FileSave;FileQuit;"
-        shutil.copy(input[1], output[0])
-        print(f"Inkscape action string:\n{action_str}")
-        subprocess.call(['inkscape', '-g', f'--actions={action_str}', output[0]])
-        # the inkscape call above embeds the bitmaps but also
-        # apparently creates a separate png file containing the
-        # embedded bitmaps, which we want to remove. commas get
-        # replaced with underscores in the paths of those files, so
-        # check for those as well
-        extra_files = glob(output[0] + '-*') + glob(output[0].replace(',', '_') + '-*')
-        print(f"Will remove the following: {extra_files}")
-        for f in extra_files:
-            try:
-                os.remove(f)
-            except FileNotFoundError:
-                # then the file was removed by something else
-                continue
-        write_create_bitmap_resolution(input[0], orig_dpi)
-
-
-rule convert_to_pdf:
-    input:
-        '{file_name}.svg'
-    output:
-        '{file_name}.pdf'
-    shell:
-        "inkscape -o {output} {input}"
