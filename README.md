@@ -4,7 +4,7 @@ Example of how to script figure creation with inkscape and python.
 
 Generally, when creating figures, I use [matplotlib](https://matplotlib.org/)
 and [seaborn](https://seaborn.pydata.org/) to create and save plots as svgs (an
-open standard for vector graphics) and combine them, possibly with some, using
+open standard for vector graphics) and combine them, possibly with some text, using
 [svgutils](https://svgutils.readthedocs.io/en/latest/). However, for one of my
 [research projects](https://github.com/billbrod/foveated-metamers/) occasionally
 I want to include .png images in my figures. These are raster graphics and so
